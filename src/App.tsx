@@ -8,16 +8,25 @@ import PlayerScreen from './components/PlayerScreen';
 import { missingEnv } from './lib/config';
 import { useAuth } from './hooks/useAuth';
 
+const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
+
 function navigate(path: string) {
-  window.history.pushState({}, '', path);
+  window.history.pushState({}, '', `${basePath}${path}` || '/');
   window.dispatchEvent(new PopStateEvent('popstate'));
 }
 
 function useRoute() {
-  const [path, setPath] = useState(window.location.pathname);
+  const getRoutePath = () => {
+    const pathname = window.location.pathname;
+    if (basePath && pathname.startsWith(basePath)) {
+      return pathname.slice(basePath.length) || '/';
+    }
+    return pathname;
+  };
+  const [path, setPath] = useState(getRoutePath);
 
   useEffect(() => {
-    const handleRoute = () => setPath(window.location.pathname);
+    const handleRoute = () => setPath(getRoutePath());
     window.addEventListener('popstate', handleRoute);
     return () => window.removeEventListener('popstate', handleRoute);
   }, []);
