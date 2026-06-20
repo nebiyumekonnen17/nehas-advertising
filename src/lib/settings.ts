@@ -17,7 +17,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   brandName: 'Nehas Advertising',
   brandSubtitle: 'ነሃስ ማስታውቂያ',
   playerFooterText: '© ነሃስ ማስታውቂያ። All rights reserved.',
-  developerCredit: 'Developed by Nebiyu Mekonnen',
+  developerCredit: 'This system Designed By Nebiyu Mekonnen',
   playerBackgroundUrl: '/nehas-bg.jpg',
   defaultItemDurationSeconds: 10,
   showPlayerFooter: true,
