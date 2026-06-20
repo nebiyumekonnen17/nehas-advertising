@@ -480,13 +480,11 @@ function PlayerShell({
   return (
     <main className="relative h-screen w-screen overflow-hidden bg-black text-white">
       {children}
-      {settings.showPlayerFooter && (
-        <footer className="pointer-events-none absolute bottom-0 left-0 right-0 grid gap-2 bg-black/60 px-5 py-3 text-xs text-white/80 backdrop-blur-sm md:grid-cols-[1fr_auto_1fr] md:items-center md:text-sm">
-          <div className="truncate">Player: {screen.name ?? 'New-Player'}</div>
-          <div className="text-center font-medium">{settings.playerFooterText}</div>
-          <div className="truncate text-left md:text-right">This system Designed By Nebiyu Mekonnen</div>
-        </footer>
-      )}
+      <footer className="pointer-events-none absolute bottom-0 left-0 right-0 z-[1000] grid min-h-10 gap-1 bg-black/80 px-5 py-2 text-xs text-white backdrop-blur-sm md:grid-cols-[1fr_auto_1fr] md:items-center md:gap-3 md:text-sm">
+        <div className="truncate">Player: {screen.name ?? 'New-Player'}</div>
+        <div className="truncate text-center font-medium">{settings.playerFooterText}</div>
+        <div className="truncate text-left md:text-right">This system Designed By Nebiyu Mekonnen</div>
+      </footer>
     </main>
   );
 }
