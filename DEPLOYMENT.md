@@ -2,6 +2,12 @@
 
 This guide deploys Nehas Advertising to Vercel with Supabase as the backend and media store.
 
+## Live Deployment
+
+- Production URL: https://nehas-advertising.vercel.app
+- Vercel project: `team-neb/nehas-advertising`
+- Supabase project: `Nehas Media Signage` (`ynkrloxlyradjbdqdaam`)
+
 ## 1. Prepare Supabase
 
 Open the Supabase SQL Editor and run these files in order:

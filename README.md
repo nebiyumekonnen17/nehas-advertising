@@ -2,6 +2,12 @@
 
 React, Vite, and Supabase digital signage for managing screens, media, playlists, campaigns, templates, and TV playback.
 
+## Production
+
+- Admin login: https://nehas-advertising.vercel.app/login
+- TV pairing: https://nehas-advertising.vercel.app/player
+- Direct players: `https://nehas-advertising.vercel.app/player/{screenId}`
+
 ## Local Start
 
 1. Copy `.env.example` to `.env`.
@@ -33,7 +39,7 @@ Run the SQL files in this order:
 
 The final production setup enables the access policies and realtime tables needed by anonymous TV players and authenticated operators.
 
-## Production
+## Deployment Guide
 
 See [DEPLOYMENT.md](DEPLOYMENT.md) for Supabase Auth and Vercel setup. Use [VALIDATION_CHECKLIST.md](VALIDATION_CHECKLIST.md) before handing the system to operators.
 
