@@ -429,6 +429,7 @@ export default function PlayerScreen({ screenId, onNavigate }: Props) {
           url={currentMedia.file_url}
           title={currentMedia.file_name}
           mode="player"
+          loopPlayback={activeItems.length === 1}
           onPlaybackComplete={advanceToNextItem}
         />
       ) : currentMedia.media_type === 'video' ? (
@@ -437,6 +438,7 @@ export default function PlayerScreen({ screenId, onNavigate }: Props) {
           className={`h-full w-full bg-black ${settings.playerFitMode === 'cover' ? 'object-cover' : 'object-contain'}`}
           src={source}
           autoPlay
+          loop={activeItems.length === 1}
           muted
           playsInline
           preload="auto"

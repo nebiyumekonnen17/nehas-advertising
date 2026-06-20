@@ -161,7 +161,7 @@ function TemplateMedia({ zone, mode }: { zone: ScreenTemplateZone; mode: 'previe
   const fitClass = zone.fit_mode === 'cover' ? 'object-cover' : 'object-contain';
 
   if (media.media_type === 'url') {
-    return <AppContent url={media.file_url} title={media.file_name} mode={mode} />;
+    return <AppContent url={media.file_url} title={media.file_name} mode={mode} loopPlayback={mode === 'player'} />;
   }
 
   if (media.media_type === 'video') {

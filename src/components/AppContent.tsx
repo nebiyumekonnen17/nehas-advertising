@@ -6,6 +6,7 @@ type Props = {
   url: string;
   title: string;
   mode?: 'thumbnail' | 'preview' | 'player';
+  loopPlayback?: boolean;
   onPlaybackComplete?: () => void;
 };
 
@@ -17,14 +18,24 @@ type WeatherPayload = {
   };
 };
 
-export default function AppContent({ url, title, mode = 'preview', onPlaybackComplete }: Props) {
+export default function AppContent({ url, title, mode = 'preview', loopPlayback = false, onPlaybackComplete }: Props) {
   const app = useMemo(() => parseSignageApp(url), [url]);
 
   if (!app) {
     return <WebsiteFrame url={url} title={title} mode={mode} />;
   }
 
-  if (app.kind === 'youtube') return <YouTubeFrame app={app} title={title} mode={mode} onPlaybackComplete={onPlaybackComplete} />;
+  if (app.kind === 'youtube') {
+    return (
+      <YouTubeFrame
+        app={app}
+        title={title}
+        mode={mode}
+        loopPlayback={loopPlayback}
+        onPlaybackComplete={onPlaybackComplete}
+      />
+    );
+  }
   if (app.kind === 'weather') return <WeatherPanel app={app} mode={mode} />;
   if (app.kind === 'clock') return <ClockPanel app={app} mode={mode} />;
   return <WebsiteFrame url={app.url} title={title} mode={mode} />;
@@ -34,16 +45,34 @@ function YouTubeFrame({
   app,
   title,
   mode,
+  loopPlayback,
   onPlaybackComplete,
 }: {
   app: Extract<SignageApp, { kind: 'youtube' }>;
   title: string;
   mode: Props['mode'];
+  loopPlayback: boolean;
   onPlaybackComplete?: () => void;
 }) {
   const iframeIdRef = useRef(`youtube-player-${Math.random().toString(36).slice(2)}`);
   const isThumbnail = mode === 'thumbnail';
-  const source = `https://www.youtube.com/embed/${encodeURIComponent(app.videoId)}?autoplay=${isThumbnail ? '0' : '1'}&mute=1&controls=${isThumbnail ? '0' : '1'}&playsinline=1&rel=0&enablejsapi=1`;
+  const params = new URLSearchParams({
+    autoplay: isThumbnail ? '0' : '1',
+    mute: '1',
+    controls: '0',
+    playsinline: '1',
+    rel: '0',
+    enablejsapi: '1',
+    disablekb: '1',
+    fs: '0',
+    iv_load_policy: '3',
+    modestbranding: '1',
+  });
+  if (loopPlayback) {
+    params.set('loop', '1');
+    params.set('playlist', app.videoId);
+  }
+  const source = `https://www.youtube.com/embed/${encodeURIComponent(app.videoId)}?${params.toString()}`;
 
   useEffect(() => {
     if (mode !== 'player' || !onPlaybackComplete) return;
@@ -64,7 +93,7 @@ function YouTubeFrame({
       player = new yt.Player(iframeIdRef.current, {
         events: {
           onStateChange: (event: { data: number }) => {
-            if (event.data === yt.PlayerState?.ENDED) {
+            if (!loopPlayback && event.data === yt.PlayerState?.ENDED) {
               onPlaybackComplete?.();
             }
           },
@@ -86,13 +115,13 @@ function YouTubeFrame({
       if (retryId) window.clearTimeout(retryId);
       player?.destroy?.();
     };
-  }, [app.videoId, mode, onPlaybackComplete]);
+  }, [app.videoId, loopPlayback, mode, onPlaybackComplete]);
 
   return (
     <div className="relative h-full w-full overflow-hidden bg-black">
       <iframe
         id={iframeIdRef.current}
-        className="h-full w-full"
+        className={`h-full w-full ${mode === 'player' ? 'pointer-events-none' : ''}`}
         src={source}
         title={title}
         allow="autoplay; encrypted-media; picture-in-picture"
