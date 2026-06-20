@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AlertTriangle, Loader2, MonitorPlay } from 'lucide-react';
 import AppContent from './AppContent';
 import TemplateRenderer from './TemplateRenderer';
@@ -21,6 +21,50 @@ type Props = {
   onNavigate: (path: string) => void;
 };
 
+function getPlaylistSignature(items: PlaylistItem[]) {
+  return items
+    .map((item) =>
+      [
+        item.id,
+        item.media_id,
+        item.display_order,
+        item.duration_seconds,
+        item.duration,
+        item.start_time,
+        item.end_time,
+        item.media?.file_url,
+        item.media?.created_at,
+      ].join(':'),
+    )
+    .join('|');
+}
+
+function getTemplateSignature(activeTemplate: ActiveTemplate | null) {
+  return activeTemplate
+    ? [
+        activeTemplate.template.id,
+        activeTemplate.template.layout_type,
+        ...activeTemplate.zones.map((zone) =>
+          [
+            zone.id,
+            zone.zone_key,
+            zone.media_id,
+            zone.fit_mode,
+            zone.background_color,
+            zone.x,
+            zone.y,
+            zone.width,
+            zone.height,
+            zone.z_index,
+            zone.border_radius,
+            zone.media?.file_url,
+            zone.media?.created_at,
+          ].join(':'),
+        ),
+      ].join('|')
+    : '';
+}
+
 export default function PlayerScreen({ screenId, onNavigate }: Props) {
   const { settings } = useAppSettings();
   const [screen, setScreen] = useState<Screen | null>(null);
@@ -31,6 +75,7 @@ export default function PlayerScreen({ screenId, onNavigate }: Props) {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
   const [failedItemIds, setFailedItemIds] = useState<Set<string>>(() => new Set());
+  const manifestRequestIdRef = useRef(0);
 
   const activeItems = useMemo(
     () =>
@@ -42,52 +87,8 @@ export default function PlayerScreen({ screenId, onNavigate }: Props) {
 
   const currentItem = activeItems[currentIndex % Math.max(activeItems.length, 1)] ?? null;
   const nextItem = activeItems[(currentIndex + 1) % Math.max(activeItems.length, 1)] ?? null;
-  const playlistSignature = useMemo(
-    () =>
-      items
-        .map((item) =>
-          [
-            item.id,
-            item.media_id,
-            item.display_order,
-            item.duration_seconds,
-            item.duration,
-            item.start_time,
-            item.end_time,
-            item.media?.file_url,
-            item.media?.created_at,
-          ].join(':'),
-        )
-        .join('|'),
-    [items],
-  );
-  const templateSignature = useMemo(
-    () =>
-      activeTemplate
-        ? [
-            activeTemplate.template.id,
-            activeTemplate.template.layout_type,
-            ...activeTemplate.zones.map((zone) =>
-              [
-                zone.id,
-                zone.zone_key,
-                zone.media_id,
-                zone.fit_mode,
-                zone.background_color,
-                zone.x,
-                zone.y,
-                zone.width,
-                zone.height,
-                zone.z_index,
-                zone.border_radius,
-                zone.media?.file_url,
-                zone.media?.created_at,
-              ].join(':'),
-            ),
-          ].join('|')
-        : '',
-    [activeTemplate],
-  );
+  const playlistSignature = useMemo(() => getPlaylistSignature(items), [items]);
+  const templateSignature = useMemo(() => getTemplateSignature(activeTemplate), [activeTemplate]);
   const advanceToNextItem = useCallback(() => {
     setCurrentIndex((index) => (index + 1) % Math.max(activeItems.length, 1));
     setPlaybackCycle((cycle) => cycle + 1);
@@ -129,13 +130,9 @@ export default function PlayerScreen({ screenId, onNavigate }: Props) {
       return;
     }
 
-    try {
-      await updatePlayerHealth({
-        player_status: 'loading',
-        player_message: 'Loading playback manifest',
-        player_error: null,
-      }).catch(() => undefined);
+    const requestId = ++manifestRequestIdRef.current;
 
+    try {
       const [screenResponse, itemsResponse] = await Promise.all([
         supabase.from('screens').select('*').eq('id', screenId).maybeSingle(),
         supabase
@@ -149,6 +146,7 @@ export default function PlayerScreen({ screenId, onNavigate }: Props) {
 
       if (screenResponse.error) throw screenResponse.error;
       if (itemsResponse.error) throw itemsResponse.error;
+      if (requestId !== manifestRequestIdRef.current) return;
       if (!screenResponse.data) {
         setError('This screen does not exist.');
         setScreen(null);
@@ -157,7 +155,10 @@ export default function PlayerScreen({ screenId, onNavigate }: Props) {
       }
 
       setScreen(screenResponse.data as Screen);
-      setItems((itemsResponse.data ?? []) as unknown as PlaylistItem[]);
+      const nextItems = (itemsResponse.data ?? []) as unknown as PlaylistItem[];
+      setItems((current) =>
+        getPlaylistSignature(current) === getPlaylistSignature(nextItems) ? current : nextItems,
+      );
 
       let nextTemplate: ActiveTemplate | null = null;
       try {
@@ -189,14 +190,21 @@ export default function PlayerScreen({ screenId, onNavigate }: Props) {
         nextTemplate = null;
       }
 
-      setActiveTemplate(nextTemplate);
+      if (requestId !== manifestRequestIdRef.current) return;
+      setActiveTemplate((current) =>
+        getTemplateSignature(current) === getTemplateSignature(nextTemplate) ? current : nextTemplate,
+      );
       setError('');
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : 'Could not load playback.');
+      if (requestId === manifestRequestIdRef.current) {
+        setError(nextError instanceof Error ? nextError.message : 'Could not load playback.');
+      }
     } finally {
-      setIsLoading(false);
+      if (requestId === manifestRequestIdRef.current) {
+        setIsLoading(false);
+      }
     }
-  }, [screenId, updatePlayerHealth]);
+  }, [screenId]);
 
   const heartbeat = useCallback(async () => {
     try {
@@ -282,9 +290,6 @@ export default function PlayerScreen({ screenId, onNavigate }: Props) {
 
     const channel = client
       .channel(`player-sync-${screenId}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'screens', filter: `id=eq.${screenId}` }, () => {
-        loadManifest();
-      })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'playlist_items', filter: `screen_id=eq.${screenId}` }, () => {
         loadManifest();
       })
