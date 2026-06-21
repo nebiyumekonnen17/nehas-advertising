@@ -85,7 +85,7 @@ export default function TemplateRenderer({ template, zones, mode = 'preview', ed
               backgroundColor: zone.background_color ?? '#020617',
             }}
           >
-            {zone.media ? (
+            {zone.media || zone.playlist ? (
               <TemplateMedia zone={zone} mode={mode} />
             ) : mode === 'preview' ? (
               <div className="flex h-full w-full items-center justify-center px-3 text-center text-sm text-slate-500">
@@ -139,7 +139,7 @@ export default function TemplateRenderer({ template, zones, mode = 'preview', ed
               backgroundColor: zone?.background_color ?? '#020617',
             }}
           >
-            {zone?.media ? (
+            {zone?.media || zone?.playlist ? (
               <TemplateMedia zone={zone} mode={mode} />
             ) : (
               <div className="flex h-full w-full items-center justify-center px-3 text-center text-sm text-slate-500">
