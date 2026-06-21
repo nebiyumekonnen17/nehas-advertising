@@ -219,7 +219,7 @@ function PlaylistZoneContent({ zone, mode }: { zone: ScreenTemplateZone; mode: '
   }, [signature]);
 
   useEffect(() => {
-    if (mode !== 'player' || !currentItem?.media) return;
+    if (!currentItem?.media) return;
     const app = currentItem.media.media_type === 'url' ? parseSignageApp(currentItem.media.file_url) : null;
     if (currentItem.media.media_type === 'video' || app?.kind === 'youtube') return;
     const timeoutId = window.setTimeout(
@@ -227,14 +227,10 @@ function PlaylistZoneContent({ zone, mode }: { zone: ScreenTemplateZone; mode: '
       Math.max(1, currentItem.duration_seconds ?? currentItem.duration ?? 10) * 1000,
     );
     return () => window.clearTimeout(timeoutId);
-  }, [advance, currentItem, mode]);
+  }, [advance, currentItem]);
 
   if (!currentItem?.media) {
     return <div className="flex h-full w-full items-center justify-center bg-black text-sm text-slate-500">Empty playlist</div>;
-  }
-
-  if (mode === 'preview') {
-    return <TemplateMedia zone={{ ...zone, playlist_id: null, playlist: null, media_id: currentItem.media_id, media: currentItem.media }} mode="preview" />;
   }
 
   const media = currentItem.media;
