@@ -25,6 +25,12 @@ React, Vite, and Supabase digital signage for managing screens, media, playlists
 - `/player` - TV pairing page.
 - `/player/:screenId` - direct fullscreen player.
 
+## Legacy TV Player
+
+Player routes run an ES5-safe capability check before React loads. Supported browsers continue to use the modern player. Older browsers automatically use the lightweight legacy player, which supports pairing, images, videos, playlist rotation, published campaign content, 30-second manifest polling, and screen health reporting. Apps, YouTube, and multi-zone templates are skipped gracefully on legacy devices.
+
+Use `?legacy=1` on a player URL to test the fallback or `?modern=1` to force the modern player during diagnostics.
+
 ## Supabase Setup
 
 Run the SQL files in this order:

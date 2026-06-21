@@ -5,6 +5,42 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#08111f" />
     <title>Nehas Advertising (ነሃስ ማስታወቂያ)</title>
+    <script>
+      (function () {
+        var path = window.location.pathname || '/';
+        var isPlayerRoute = /\/player(?:\/|$)/.test(path);
+        if (!isPlayerRoute) return;
+
+        var forceLegacy = /(?:\?|&)legacy=1(?:&|$)/.test(window.location.search || '');
+        var forceModern = /(?:\?|&)modern=1(?:&|$)/.test(window.location.search || '');
+        var testScript = document.createElement('script');
+        var supportsModernPlayer =
+          'noModule' in testScript &&
+          typeof window.Promise === 'function' &&
+          typeof window.fetch === 'function' &&
+          typeof window.URL === 'function' &&
+          typeof window.URLSearchParams === 'function' &&
+          typeof window.WebSocket === 'function' &&
+          typeof Object.assign === 'function' &&
+          typeof Array.from === 'function';
+
+        if (!forceModern && (forceLegacy || !supportsModernPlayer)) {
+          var payload = {
+            path: path,
+            supabaseUrl: '%VITE_SUPABASE_URL%',
+            anonKey: '%VITE_SUPABASE_ANON_KEY%'
+          };
+          var serialized = 'NEHAS_LEGACY:' + JSON.stringify(payload);
+          window.name = serialized;
+          try {
+            window.localStorage.setItem('nehas-legacy-bootstrap', serialized);
+          } catch (ignore) {}
+
+          var base = path.indexOf('/nehas-advertising/') === 0 ? '/nehas-advertising/' : '/';
+          window.location.replace(base + 'legacy.html');
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
