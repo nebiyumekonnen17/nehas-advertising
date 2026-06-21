@@ -348,7 +348,7 @@ export default function AdminApp({ session, onNavigate }: Props) {
               {view === 'playlists' && <PlaylistPanel data={data} settings={settingsState.settings} />}
               {view === 'campaigns' && <CampaignsPanel data={data} settings={settingsState.settings} />}
               {view === 'templates' && <TemplatesPanel data={data} />}
-              {view === 'preview' && <PreviewPanel activeItems={activeItems} screen={data.selectedScreen} />}
+              {view === 'preview' && <PreviewPanel activeItems={activeItems} data={data} />}
               {view === 'settings' && <SettingsPanel data={data} settingsState={settingsState} />}
             </PanelErrorBoundary>
           )}
@@ -1789,39 +1789,204 @@ function PlaylistRow({
   );
 }
 
-function PreviewPanel({ screen, activeItems }: { screen: Screen | null; activeItems: PlaylistItem[] }) {
-  const firstItem = activeItems[0] ?? null;
-  const signature = firstItem ? `${firstItem.id}-${firstItem.media?.created_at ?? ''}` : '';
+function PreviewPanel({
+  data,
+  activeItems,
+}: {
+  data: ReturnType<typeof useSignageData>;
+  activeItems: PlaylistItem[];
+}) {
+  const screen = data.selectedScreen;
+  const [activeTemplate, setActiveTemplate] = useState<{
+    template: ScreenTemplate;
+    zones: ScreenTemplateZone[];
+  } | null>(null);
+  const [templateError, setTemplateError] = useState('');
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [playbackCycle, setPlaybackCycle] = useState(0);
+
+  const playlistSignature = useMemo(
+    () =>
+      activeItems
+        .map((item) => `${item.id}:${item.media_id}:${item.display_order}:${item.duration_seconds}:${item.media?.file_url}`)
+        .join('|'),
+    [activeItems],
+  );
+  const currentItem = activeItems[currentIndex % Math.max(activeItems.length, 1)] ?? null;
+
+  const advance = useCallback(() => {
+    setCurrentIndex((index) => (index + 1) % Math.max(activeItems.length, 1));
+    setPlaybackCycle((cycle) => cycle + 1);
+  }, [activeItems.length]);
+
+  const loadActiveTemplate = useCallback(async () => {
+    if (!supabase || !screen) {
+      setActiveTemplate(null);
+      setTemplateError('');
+      return;
+    }
+
+    try {
+      const assignmentResponse = await supabase
+        .from('screen_template_assignments')
+        .select('template_id')
+        .eq('screen_id', screen.id)
+        .eq('active', true)
+        .maybeSingle();
+
+      if (assignmentResponse.error) throw assignmentResponse.error;
+      if (!assignmentResponse.data?.template_id) {
+        setActiveTemplate(null);
+        setTemplateError('');
+        return;
+      }
+
+      const [templateResponse, zonesResponse] = await Promise.all([
+        supabase
+          .from('screen_templates')
+          .select('*')
+          .eq('id', assignmentResponse.data.template_id)
+          .maybeSingle(),
+        supabase
+          .from('screen_template_zones')
+          .select('id, template_id, zone_key, media_id, fit_mode, background_color, sort_order, x, y, width, height, z_index, border_radius, media(id, file_name, file_url, media_type, created_at)')
+          .eq('template_id', assignmentResponse.data.template_id)
+          .order('sort_order', { ascending: true }),
+      ]);
+
+      if (templateResponse.error) throw templateResponse.error;
+      if (zonesResponse.error) throw zonesResponse.error;
+      if (!templateResponse.data) throw new Error('The assigned template no longer exists.');
+
+      setActiveTemplate({
+        template: templateResponse.data as ScreenTemplate,
+        zones: (zonesResponse.data ?? []) as unknown as ScreenTemplateZone[],
+      });
+      setTemplateError('');
+    } catch (error) {
+      setActiveTemplate(null);
+      setTemplateError(error instanceof Error ? error.message : 'Could not load the assigned template.');
+    }
+  }, [screen]);
+
+  useEffect(() => {
+    loadActiveTemplate();
+  }, [loadActiveTemplate]);
+
+  useEffect(() => {
+    if (!supabase || !screen) return;
+    const client = supabase;
+    const channel = client
+      .channel(`admin-preview-${screen.id}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'screen_template_assignments', filter: `screen_id=eq.${screen.id}` }, loadActiveTemplate)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'screen_templates' }, loadActiveTemplate)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'screen_template_zones' }, loadActiveTemplate)
+      .subscribe();
+
+    return () => {
+      client.removeChannel(channel);
+    };
+  }, [loadActiveTemplate, screen]);
+
+  useEffect(() => {
+    setCurrentIndex(0);
+    setPlaybackCycle(0);
+  }, [playlistSignature, screen?.id]);
+
+  useEffect(() => {
+    if (activeTemplate || !currentItem?.media) return;
+    const app = currentItem.media.media_type === 'url' ? parseSignageApp(currentItem.media.file_url) : null;
+    if (currentItem.media.media_type === 'video' || app?.kind === 'youtube') return;
+
+    const timeoutId = window.setTimeout(
+      advance,
+      Math.max(1, currentItem.duration_seconds ?? currentItem.duration ?? 10) * 1000,
+    );
+    return () => window.clearTimeout(timeoutId);
+  }, [activeTemplate, advance, currentItem]);
+
+  const signature = currentItem
+    ? `${currentItem.id}-${currentItem.media?.created_at ?? ''}-${playbackCycle}`
+    : '';
 
   return (
     <section className="rounded-lg border border-slate-800 bg-slate-900/80 p-5 shadow-panel">
       <PanelTitle title="Current preview" description={screen ? `Active playback for ${screen.name ?? 'New-Player'}.` : 'Select a screen first.'} />
+      <div className="mt-4 max-w-sm">
+        <Field label="Screen">
+          <select
+            className="field"
+            value={data.selectedScreenId ?? ''}
+            onChange={(event) => data.setSelectedScreenId(event.target.value || null)}
+          >
+            {data.screens.length === 0 && <option value="">No screens available</option>}
+            {data.screens.map((candidate) => (
+              <option key={candidate.id} value={candidate.id}>
+                {candidate.name ?? 'New-Player'}
+              </option>
+            ))}
+          </select>
+        </Field>
+      </div>
+      {templateError && (
+        <div className="mt-4 rounded-lg border border-rose-400/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
+          Template preview failed: {templateError}
+        </div>
+      )}
       <div className="mt-5 overflow-hidden rounded-lg border border-slate-800 bg-black">
         <div className="aspect-video">
-          {!firstItem?.media ? (
+          {activeTemplate ? (
+            <TemplateRenderer
+              template={activeTemplate.template}
+              zones={activeTemplate.zones}
+              mode="player"
+            />
+          ) : !currentItem?.media ? (
             <div className="flex h-full items-center justify-center text-slate-500">No active media for this time window</div>
-          ) : firstItem.media.media_type === 'url' ? (
-            <AppContent url={firstItem.media.file_url} title={firstItem.media.file_name} mode="preview" />
-          ) : firstItem.media.media_type === 'video' ? (
+          ) : currentItem.media.media_type === 'url' ? (
+            <AppContent
+              key={signature}
+              url={currentItem.media.file_url}
+              title={currentItem.media.file_name}
+              mode="player"
+              loopPlayback={activeItems.length === 1}
+              onPlaybackComplete={advance}
+            />
+          ) : currentItem.media.media_type === 'video' ? (
             <video
+              key={signature}
               className="h-full w-full object-contain"
-              src={appendCacheSignature(firstItem.media.file_url, signature)}
+              src={appendCacheSignature(currentItem.media.file_url, signature)}
+              autoPlay
+              loop={activeItems.length === 1}
               muted
-              controls
-              preload="metadata"
+              playsInline
+              preload="auto"
+              onEnded={advance}
+              onError={advance}
             />
           ) : (
             <img
+              key={signature}
               className="h-full w-full object-contain"
-              src={appendCacheSignature(firstItem.media.file_url, signature)}
-              alt={firstItem.media.file_name}
+              src={appendCacheSignature(currentItem.media.file_url, signature)}
+              alt={currentItem.media.file_name}
+              onError={advance}
             />
           )}
         </div>
       </div>
+      {activeTemplate && (
+        <div className="mt-4 rounded-lg border border-cyan-400/25 bg-cyan-500/10 px-4 py-3 text-sm text-cyan-100">
+          Template active: {activeTemplate.template.name}
+        </div>
+      )}
       <div className="mt-4 grid gap-3 md:grid-cols-3">
         {activeItems.map((item) => (
-          <div key={item.id} className="rounded-lg border border-slate-800 bg-slate-950 px-3 py-2">
+          <div
+            key={item.id}
+            className={`rounded-lg border px-3 py-2 ${!activeTemplate && item.id === currentItem?.id ? 'border-cyan-300/60 bg-cyan-500/10' : 'border-slate-800 bg-slate-950'}`}
+          >
             <p className="truncate text-sm font-medium text-white">{item.media?.file_name ?? 'Missing media'}</p>
             <p className="text-xs text-slate-500">
               {item.start_time ?? '00:00'} to {item.end_time ?? '23:59'} - {item.duration_seconds ?? 10}s
@@ -2041,6 +2206,10 @@ function TemplatesPanel({ data }: { data: ReturnType<typeof useSignageData> }) {
       }
 
       await loadTemplateDetails();
+      if (!assignedScreenIds.has(screenId)) {
+        data.setSelectedScreenId(screenId);
+        await data.loadPlaylistItems(screenId);
+      }
       data.notify({ tone: 'success', message: 'Template assignment updated.' });
     } catch (error) {
       data.notify({ tone: 'error', message: error instanceof Error ? error.message : 'Could not assign template.' });
