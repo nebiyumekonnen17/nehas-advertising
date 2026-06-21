@@ -3,6 +3,9 @@ import { appendCacheSignature } from '../lib/media';
 import { getTemplateLayout } from '../lib/templates';
 import type { ScreenTemplate, ScreenTemplateZone } from '../types';
 import type { PointerEvent as ReactPointerEvent } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { parseSignageApp } from '../lib/apps';
+import { isWithinWindow } from '../lib/time';
 
 type Props = {
   template: ScreenTemplate;
@@ -155,6 +158,10 @@ function clamp(value: number, min: number, max: number) {
 }
 
 function TemplateMedia({ zone, mode }: { zone: ScreenTemplateZone; mode: 'preview' | 'player' }) {
+  if (zone.playlist) {
+    return <PlaylistZoneContent zone={zone} mode={mode} />;
+  }
+
   const media = zone.media;
   if (!media) return null;
 
@@ -184,6 +191,93 @@ function TemplateMedia({ zone, mode }: { zone: ScreenTemplateZone; mode: 'previe
       className={`h-full w-full bg-black ${fitClass}`}
       src={appendCacheSignature(media.file_url, media.created_at ?? media.id)}
       alt={media.file_name}
+    />
+  );
+}
+
+function PlaylistZoneContent({ zone, mode }: { zone: ScreenTemplateZone; mode: 'preview' | 'player' }) {
+  const items = useMemo(
+    () =>
+      [...(zone.playlist?.playlist_items ?? [])]
+        .filter((item) => item.media && isWithinWindow(item.start_time, item.end_time))
+        .sort((a, b) => a.display_order - b.display_order),
+    [zone.playlist?.playlist_items],
+  );
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [cycle, setCycle] = useState(0);
+  const currentItem = items[currentIndex % Math.max(items.length, 1)] ?? null;
+  const signature = items.map((item) => `${item.id}:${item.media_id}:${item.display_order}:${item.duration_seconds}`).join('|');
+
+  const advance = useCallback(() => {
+    setCurrentIndex((index) => (index + 1) % Math.max(items.length, 1));
+    setCycle((value) => value + 1);
+  }, [items.length]);
+
+  useEffect(() => {
+    setCurrentIndex(0);
+    setCycle(0);
+  }, [signature]);
+
+  useEffect(() => {
+    if (mode !== 'player' || !currentItem?.media) return;
+    const app = currentItem.media.media_type === 'url' ? parseSignageApp(currentItem.media.file_url) : null;
+    if (currentItem.media.media_type === 'video' || app?.kind === 'youtube') return;
+    const timeoutId = window.setTimeout(
+      advance,
+      Math.max(1, currentItem.duration_seconds ?? currentItem.duration ?? 10) * 1000,
+    );
+    return () => window.clearTimeout(timeoutId);
+  }, [advance, currentItem, mode]);
+
+  if (!currentItem?.media) {
+    return <div className="flex h-full w-full items-center justify-center bg-black text-sm text-slate-500">Empty playlist</div>;
+  }
+
+  if (mode === 'preview') {
+    return <TemplateMedia zone={{ ...zone, playlist_id: null, playlist: null, media_id: currentItem.media_id, media: currentItem.media }} mode="preview" />;
+  }
+
+  const media = currentItem.media;
+  const key = `${currentItem.id}-${cycle}`;
+  const fitClass = zone.fit_mode === 'cover' ? 'object-cover' : 'object-contain';
+
+  if (media.media_type === 'url') {
+    return (
+      <AppContent
+        key={key}
+        url={media.file_url}
+        title={media.file_name}
+        mode="player"
+        loopPlayback={items.length === 1}
+        onPlaybackComplete={advance}
+      />
+    );
+  }
+
+  if (media.media_type === 'video') {
+    return (
+      <video
+        key={key}
+        className={`h-full w-full bg-black ${fitClass}`}
+        src={appendCacheSignature(media.file_url, `${media.created_at ?? media.id}-${cycle}`)}
+        autoPlay
+        loop={items.length === 1}
+        muted
+        playsInline
+        preload="auto"
+        onEnded={advance}
+        onError={advance}
+      />
+    );
+  }
+
+  return (
+    <img
+      key={key}
+      className={`h-full w-full bg-black ${fitClass}`}
+      src={appendCacheSignature(media.file_url, `${media.created_at ?? media.id}-${cycle}`)}
+      alt={media.file_name}
+      onError={advance}
     />
   );
 }

@@ -27,6 +27,7 @@ export type Media = {
 export type PlaylistItem = {
   id: string;
   screen_id: string | null;
+  playlist_id?: string | null;
   media_id: string | null;
   display_order: number;
   duration_seconds: number | null;
@@ -34,6 +35,20 @@ export type PlaylistItem = {
   start_time: string | null;
   end_time: string | null;
   media?: Media | null;
+};
+
+export type Playlist = {
+  id: string;
+  name: string;
+  created_at: string | null;
+  playlist_items?: PlaylistItem[];
+};
+
+export type ScreenPlaylistAssignment = {
+  id: string;
+  screen_id: string;
+  playlist_id: string;
+  created_at: string | null;
 };
 
 export type Toast = {
@@ -82,6 +97,7 @@ export type ScreenTemplateZone = {
   template_id: string | null;
   zone_key: string;
   media_id: string | null;
+  playlist_id?: string | null;
   fit_mode: 'contain' | 'cover' | null;
   background_color: string | null;
   sort_order: number | null;
@@ -92,6 +108,7 @@ export type ScreenTemplateZone = {
   z_index: number | null;
   border_radius: number | null;
   media?: Media | null;
+  playlist?: Playlist | null;
 };
 
 export type ScreenTemplateAssignment = {

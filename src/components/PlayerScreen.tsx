@@ -10,6 +10,8 @@ import { isWithinWindow } from '../lib/time';
 import type { PlaylistItem, Screen, ScreenTemplate, ScreenTemplateZone } from '../types';
 
 const PLAYER_VERSION = 'web-player-0.1.0';
+const TEMPLATE_ZONE_SELECT =
+  'id, template_id, zone_key, media_id, playlist_id, fit_mode, background_color, sort_order, x, y, width, height, z_index, border_radius, media(id, file_name, file_url, media_type, created_at), playlist:playlists(id, name, created_at, playlist_items(id, screen_id, playlist_id, media_id, display_order, duration_seconds, duration, start_time, end_time, media(id, file_name, file_url, media_type, created_at)))';
 
 type ActiveTemplate = {
   template: ScreenTemplate;
@@ -59,6 +61,10 @@ function getTemplateSignature(activeTemplate: ActiveTemplate | null) {
             zone.border_radius,
             zone.media?.file_url,
             zone.media?.created_at,
+            zone.playlist_id,
+            zone.playlist?.playlist_items
+              ?.map((item) => `${item.id}:${item.media_id}:${item.display_order}:${item.duration_seconds}:${item.media?.file_url}`)
+              .join(','),
           ].join(':'),
         ),
       ].join('|')
@@ -155,7 +161,27 @@ export default function PlayerScreen({ screenId, onNavigate }: Props) {
       }
 
       setScreen(screenResponse.data as Screen);
-      const nextItems = (itemsResponse.data ?? []) as unknown as PlaylistItem[];
+      let nextItems = (itemsResponse.data ?? []) as unknown as PlaylistItem[];
+      try {
+        const playlistAssignment = await supabase
+          .from('screen_playlist_assignments')
+          .select('playlist_id')
+          .eq('screen_id', screenId)
+          .maybeSingle();
+
+        if (!playlistAssignment.error && playlistAssignment.data?.playlist_id) {
+          const reusableItems = await supabase
+            .from('playlist_items')
+            .select('id, screen_id, playlist_id, media_id, display_order, duration_seconds, duration, start_time, end_time, media(id, file_name, file_url, media_type, created_at)')
+            .eq('playlist_id', playlistAssignment.data.playlist_id)
+            .order('display_order', { ascending: true });
+          if (!reusableItems.error) {
+            nextItems = (reusableItems.data ?? []) as unknown as PlaylistItem[];
+          }
+        }
+      } catch {
+        // Reusable playlists are optional until their migration is installed.
+      }
       setItems((current) =>
         getPlaylistSignature(current) === getPlaylistSignature(nextItems) ? current : nextItems,
       );
@@ -174,7 +200,7 @@ export default function PlayerScreen({ screenId, onNavigate }: Props) {
             supabase.from('screen_templates').select('*').eq('id', assignmentResponse.data.template_id).maybeSingle(),
             supabase
               .from('screen_template_zones')
-              .select('id, template_id, zone_key, media_id, fit_mode, background_color, sort_order, x, y, width, height, z_index, border_radius, media(id, file_name, file_url, media_type, created_at)')
+              .select(TEMPLATE_ZONE_SELECT)
               .eq('template_id', assignmentResponse.data.template_id)
               .order('sort_order', { ascending: true }),
           ]);
@@ -290,7 +316,13 @@ export default function PlayerScreen({ screenId, onNavigate }: Props) {
 
     const channel = client
       .channel(`player-sync-${screenId}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'playlist_items', filter: `screen_id=eq.${screenId}` }, () => {
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'playlist_items' }, () => {
+        loadManifest();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'playlists' }, () => {
+        loadManifest();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'screen_playlist_assignments', filter: `screen_id=eq.${screenId}` }, () => {
         loadManifest();
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'media' }, () => {

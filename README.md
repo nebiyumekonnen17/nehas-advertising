@@ -33,9 +33,10 @@ Run the SQL files in this order:
 2. `supabase-upload-setup.sql`
 3. `supabase-campaigns-migration.sql`
 4. `supabase-templates-migration.sql`
-5. `supabase-settings-migration.sql`
-6. `supabase-sample-media-seed.sql` (optional starter content)
-7. `supabase-production-setup.sql`
+5. `supabase-playlists-migration.sql`
+6. `supabase-settings-migration.sql`
+7. `supabase-sample-media-seed.sql` (optional starter content)
+8. `supabase-production-setup.sql`
 
 The final production setup enables the access policies and realtime tables needed by anonymous TV players and authenticated operators.
 

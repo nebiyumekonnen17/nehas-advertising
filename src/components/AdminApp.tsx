@@ -69,8 +69,10 @@ import type {
   CampaignItem,
   CampaignScreen,
   Media,
+  Playlist,
   PlaylistItem,
   Screen,
+  ScreenPlaylistAssignment,
   ScreenTemplate,
   ScreenTemplateAssignment,
   ScreenTemplateZone,
@@ -83,6 +85,9 @@ type Props = {
 };
 
 type View = 'screens' | 'media' | 'playlists' | 'campaigns' | 'templates' | 'preview' | 'settings';
+
+const TEMPLATE_ZONE_SELECT =
+  'id, template_id, zone_key, media_id, playlist_id, fit_mode, background_color, sort_order, x, y, width, height, z_index, border_radius, media(id, file_name, file_url, media_type, created_at), playlist:playlists(id, name, created_at, playlist_items(id, screen_id, playlist_id, media_id, display_order, duration_seconds, duration, start_time, end_time, media(id, file_name, file_url, media_type, created_at)))';
 
 function randomPairingCode() {
   return String(Math.floor(100000 + Math.random() * 900000));
@@ -1121,18 +1126,121 @@ function MediaCard({ asset, onDelete }: { asset: Media; onDelete: () => void }) 
 }
 
 function PlaylistPanel({ data, settings }: { data: ReturnType<typeof useSignageData>; settings: AppSettings }) {
-  const orderedItems = sortPlaylist(data.playlistItems);
+  const [playlists, setPlaylists] = useState<Playlist[]>([]);
+  const [selectedPlaylistId, setSelectedPlaylistId] = useState<string | null>(null);
+  const [items, setItems] = useState<PlaylistItem[]>([]);
+  const [assignments, setAssignments] = useState<ScreenPlaylistAssignment[]>([]);
+  const [name, setName] = useState('');
+  const [isCreating, setIsCreating] = useState(false);
   const [addingMediaId, setAddingMediaId] = useState<string | null>(null);
+  const selectedPlaylist = playlists.find((playlist) => playlist.id === selectedPlaylistId) ?? null;
+  const orderedItems = sortPlaylist(items);
+  const assignedScreenIds = new Set(assignments.map((assignment) => assignment.screen_id));
+
+  const loadPlaylists = useCallback(async () => {
+    if (!supabase) return;
+    try {
+      const { data: rows, error } = await supabase
+        .from('playlists')
+        .select('*')
+        .order('created_at', { ascending: false });
+      if (error) throw error;
+      const next = (rows ?? []) as Playlist[];
+      setPlaylists(next);
+      setSelectedPlaylistId((current) =>
+        current && next.some((playlist) => playlist.id === current) ? current : next[0]?.id ?? null,
+      );
+    } catch (error) {
+      data.notify({
+        tone: 'error',
+        message: error instanceof Error
+          ? `${error.message}. Run supabase-playlists-migration.sql.`
+          : 'Could not load playlists.',
+      });
+    }
+  }, [data]);
+
+  const loadPlaylistDetails = useCallback(async (playlistId = selectedPlaylistId) => {
+    if (!supabase || !playlistId) {
+      setItems([]);
+      setAssignments([]);
+      return;
+    }
+
+    try {
+      const [itemsResponse, assignmentsResponse] = await Promise.all([
+        supabase
+          .from('playlist_items')
+          .select('id, screen_id, playlist_id, media_id, display_order, duration_seconds, duration, start_time, end_time, media(id, file_name, file_url, media_type, created_at)')
+          .eq('playlist_id', playlistId)
+          .order('display_order', { ascending: true }),
+        supabase.from('screen_playlist_assignments').select('*').eq('playlist_id', playlistId),
+      ]);
+      if (itemsResponse.error) throw itemsResponse.error;
+      if (assignmentsResponse.error) throw assignmentsResponse.error;
+      setItems((itemsResponse.data ?? []) as unknown as PlaylistItem[]);
+      setAssignments((assignmentsResponse.data ?? []) as ScreenPlaylistAssignment[]);
+    } catch (error) {
+      data.notify({ tone: 'error', message: error instanceof Error ? error.message : 'Could not load playlist.' });
+    }
+  }, [data, selectedPlaylistId]);
+
+  useEffect(() => {
+    loadPlaylists();
+  }, [loadPlaylists]);
+
+  useEffect(() => {
+    loadPlaylistDetails();
+  }, [loadPlaylistDetails]);
+
+  async function createPlaylist(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!supabase || !name.trim()) return;
+    setIsCreating(true);
+    try {
+      const { data: inserted, error } = await supabase
+        .from('playlists')
+        .insert({ name: name.trim() })
+        .select('*')
+        .single();
+      if (error) throw error;
+      setName('');
+      await loadPlaylists();
+      setSelectedPlaylistId((inserted as Playlist).id);
+      data.notify({ tone: 'success', message: 'Playlist created.' });
+    } catch (error) {
+      data.notify({ tone: 'error', message: error instanceof Error ? error.message : 'Could not create playlist.' });
+    } finally {
+      setIsCreating(false);
+    }
+  }
+
+  async function deletePlaylist() {
+    if (!supabase || !selectedPlaylist) return;
+    if (!window.confirm(`Delete playlist ${selectedPlaylist.name}? Its screen and template-zone assignments will be removed.`)) return;
+    try {
+      const { error } = await supabase.from('playlists').delete().eq('id', selectedPlaylist.id);
+      if (error) throw error;
+      setSelectedPlaylistId(null);
+      setItems([]);
+      setAssignments([]);
+      await loadPlaylists();
+      data.notify({ tone: 'success', message: 'Playlist deleted.' });
+    } catch (error) {
+      data.notify({ tone: 'error', message: error instanceof Error ? error.message : 'Could not delete playlist.' });
+    }
+  }
 
   async function addMedia(asset: Media) {
-    if (!supabase || !data.selectedScreenId) return;
+    if (!supabase || !selectedPlaylistId) return;
     const nextOrder = orderedItems.reduce((max, item) => Math.max(max, item.display_order), 0) + 1;
     setAddingMediaId(asset.id);
 
     try {
       const durationSeconds = await getDefaultPlaylistDuration(asset, settings);
       const { error } = await supabase.from('playlist_items').insert({
-        screen_id: data.selectedScreenId,
+        screen_id: null,
+        playlist_id: selectedPlaylistId,
         media_id: asset.id,
         display_order: nextOrder,
         duration_seconds: durationSeconds,
@@ -1141,7 +1249,7 @@ function PlaylistPanel({ data, settings }: { data: ReturnType<typeof useSignageD
         end_time: '23:59',
       });
       if (error) throw error;
-      await data.loadPlaylistItems();
+      await loadPlaylistDetails();
       data.notify({ tone: 'success', message: 'Added media to playlist.' });
     } catch (error) {
       data.notify({ tone: 'error', message: error instanceof Error ? error.message : 'Could not add playlist item.' });
@@ -1155,7 +1263,7 @@ function PlaylistPanel({ data, settings }: { data: ReturnType<typeof useSignageD
     try {
       const { error } = await supabase.from('playlist_items').update(patch).eq('id', item.id);
       if (error) throw error;
-      await data.loadPlaylistItems();
+      await loadPlaylistDetails();
     } catch (error) {
       data.notify({ tone: 'error', message: error instanceof Error ? error.message : 'Could not update playlist item.' });
     }
@@ -1166,7 +1274,7 @@ function PlaylistPanel({ data, settings }: { data: ReturnType<typeof useSignageD
     try {
       const { error } = await supabase.from('playlist_items').delete().eq('id', item.id);
       if (error) throw error;
-      await data.loadPlaylistItems();
+      await loadPlaylistDetails();
       data.notify({ tone: 'success', message: 'Playlist item removed.' });
     } catch (error) {
       data.notify({ tone: 'error', message: error instanceof Error ? error.message : 'Could not remove playlist item.' });
@@ -1187,24 +1295,80 @@ function PlaylistPanel({ data, settings }: { data: ReturnType<typeof useSignageD
       if (stepTwo.error) throw stepTwo.error;
       const stepThree = await supabase.from('playlist_items').update({ display_order: next.display_order }).eq('id', current.id);
       if (stepThree.error) throw stepThree.error;
-      await data.loadPlaylistItems();
+      await loadPlaylistDetails();
     } catch (error) {
       data.notify({ tone: 'error', message: error instanceof Error ? error.message : 'Could not reorder playlist.' });
-      await data.loadPlaylistItems();
+      await loadPlaylistDetails();
+    }
+  }
+
+  async function toggleScreenAssignment(screenId: string) {
+    if (!supabase || !selectedPlaylistId) return;
+    try {
+      if (assignedScreenIds.has(screenId)) {
+        const { error } = await supabase.from('screen_playlist_assignments').delete().eq('screen_id', screenId);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.from('screen_playlist_assignments').upsert(
+          { screen_id: screenId, playlist_id: selectedPlaylistId },
+          { onConflict: 'screen_id' },
+        );
+        if (error) throw error;
+      }
+      await loadPlaylistDetails();
+      data.notify({ tone: 'success', message: 'Screen playlist assignment updated.' });
+    } catch (error) {
+      data.notify({ tone: 'error', message: error instanceof Error ? error.message : 'Could not assign playlist.' });
     }
   }
 
   return (
-    <div className="grid gap-5 xl:grid-cols-[1fr_360px]">
-      <section className="rounded-lg border border-slate-800 bg-slate-900/80 p-5 shadow-panel">
-        <PanelTitle
-          title="Screen playlist"
-          description={data.selectedScreen ? `Playback order for ${data.selectedScreen.name ?? 'New-Player'}.` : 'Select a screen to manage playback.'}
-        />
-        <ScreenSelect data={data} />
-        <div className="mt-5 space-y-3">
-          {!data.selectedScreen ? (
-            <EmptyState icon={<Monitor />} title="No screen selected" description="Create or select a screen first." />
+    <section className="grid gap-5 xl:grid-cols-[300px_1fr]">
+      <div className="space-y-5">
+        <div className="rounded-lg border border-slate-800 bg-slate-900/80 p-5 shadow-panel">
+          <PanelTitle title="Create playlist" description="Build reusable content once, then assign it anywhere." />
+          <form onSubmit={createPlaylist} className="mt-4 space-y-3">
+            <Field label="Playlist name">
+              <input className="field" value={name} onChange={(event) => setName(event.target.value)} placeholder="Lobby rotation" required />
+            </Field>
+            <button className="primary-button w-full" disabled={isCreating} type="submit">
+              <Plus className="h-4 w-4" />
+              {isCreating ? 'Creating...' : 'Create playlist'}
+            </button>
+          </form>
+        </div>
+        <div className="rounded-lg border border-slate-800 bg-slate-900/80 p-5 shadow-panel">
+          <PanelTitle title="Playlists" description="Select one to edit and assign." />
+          <div className="mt-4 space-y-2">
+            {playlists.length === 0 ? (
+              <EmptyState icon={<Clock3 />} title="No playlists" description="Create your first reusable playlist." />
+            ) : playlists.map((playlist) => (
+              <button
+                key={playlist.id}
+                type="button"
+                onClick={() => setSelectedPlaylistId(playlist.id)}
+                className={`w-full rounded-lg border px-3 py-3 text-left text-sm font-medium transition ${playlist.id === selectedPlaylistId ? 'border-cyan-300 bg-cyan-300/10 text-white' : 'border-slate-800 bg-slate-950 text-slate-300 hover:border-slate-600'}`}
+              >
+                {playlist.name}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="space-y-5">
+        <section className="rounded-lg border border-slate-800 bg-slate-900/80 p-5 shadow-panel">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <PanelTitle title={selectedPlaylist?.name ?? 'Select a playlist'} description="Order media and set item durations." />
+            {selectedPlaylist && (
+              <button onClick={deletePlaylist} className="secondary-button py-2 text-rose-200" type="button">
+                <Trash2 className="h-4 w-4" /> Delete
+              </button>
+            )}
+          </div>
+          <div className="mt-5 space-y-3">
+          {!selectedPlaylist ? (
+            <EmptyState icon={<Clock3 />} title="No playlist selected" description="Create or select a playlist first." />
           ) : orderedItems.length === 0 ? (
             <EmptyState icon={<Clock3 />} title="Playlist is empty" description="Add media from the library to begin playback." />
           ) : (
@@ -1221,12 +1385,13 @@ function PlaylistPanel({ data, settings }: { data: ReturnType<typeof useSignageD
               />
             ))
           )}
-        </div>
-      </section>
+          </div>
+        </section>
 
-      <section className="rounded-lg border border-slate-800 bg-slate-900/80 p-5 shadow-panel">
-        <PanelTitle title="Add media" description="Attach assets to the selected screen." />
-        <div className="mt-5 space-y-2">
+        <div className="grid gap-5 lg:grid-cols-2">
+          <section className="rounded-lg border border-slate-800 bg-slate-900/80 p-5 shadow-panel">
+            <PanelTitle title="Add media" description="Add library items to this playlist." />
+            <div className="mt-5 max-h-[480px] space-y-2 overflow-y-auto pr-1">
           {data.media.length === 0 ? (
             <EmptyState icon={<Library />} title="No assets" description="Upload media before adding playlist items." />
           ) : (
@@ -1234,7 +1399,7 @@ function PlaylistPanel({ data, settings }: { data: ReturnType<typeof useSignageD
               <button
                 key={asset.id}
                 onClick={() => addMedia(asset)}
-                disabled={!data.selectedScreenId || addingMediaId === asset.id}
+                disabled={!selectedPlaylistId || addingMediaId === asset.id}
                 className="flex w-full items-center gap-3 rounded-lg border border-slate-800 bg-slate-950 px-3 py-3 text-left transition hover:border-cyan-300 disabled:cursor-not-allowed disabled:opacity-50"
                 type="button"
               >
@@ -1250,9 +1415,31 @@ function PlaylistPanel({ data, settings }: { data: ReturnType<typeof useSignageD
               </button>
             ))
           )}
+            </div>
+          </section>
+
+          <section className="rounded-lg border border-slate-800 bg-slate-900/80 p-5 shadow-panel">
+            <PanelTitle title="Assign to screens" description="Templates still take priority when active." />
+            <div className="mt-5 space-y-2">
+              {data.screens.length === 0 ? (
+                <EmptyState icon={<Monitor />} title="No screens" description="Create a screen before assigning playlists." />
+              ) : data.screens.map((screen) => (
+                <label key={screen.id} className="flex cursor-pointer items-center gap-3 rounded-lg border border-slate-800 bg-slate-950 px-3 py-3 text-sm text-slate-200">
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 accent-cyan-300"
+                    checked={assignedScreenIds.has(screen.id)}
+                    disabled={!selectedPlaylistId}
+                    onChange={() => toggleScreenAssignment(screen.id)}
+                  />
+                  <span className="min-w-0 flex-1 truncate">{screen.name ?? 'New-Player'}</span>
+                </label>
+              ))}
+            </div>
+          </section>
         </div>
-      </section>
-    </div>
+      </div>
+    </section>
   );
 }
 
@@ -1802,22 +1989,55 @@ function PreviewPanel({
     zones: ScreenTemplateZone[];
   } | null>(null);
   const [templateError, setTemplateError] = useState('');
+  const [assignedPlaylistItems, setAssignedPlaylistItems] = useState<PlaylistItem[] | null>(null);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [playbackCycle, setPlaybackCycle] = useState(0);
+  const previewItems = assignedPlaylistItems ?? activeItems;
 
   const playlistSignature = useMemo(
     () =>
-      activeItems
+      previewItems
         .map((item) => `${item.id}:${item.media_id}:${item.display_order}:${item.duration_seconds}:${item.media?.file_url}`)
         .join('|'),
-    [activeItems],
+    [previewItems],
   );
-  const currentItem = activeItems[currentIndex % Math.max(activeItems.length, 1)] ?? null;
+  const currentItem = previewItems[currentIndex % Math.max(previewItems.length, 1)] ?? null;
 
   const advance = useCallback(() => {
-    setCurrentIndex((index) => (index + 1) % Math.max(activeItems.length, 1));
+    setCurrentIndex((index) => (index + 1) % Math.max(previewItems.length, 1));
     setPlaybackCycle((cycle) => cycle + 1);
-  }, [activeItems.length]);
+  }, [previewItems.length]);
+
+  const loadAssignedPlaylist = useCallback(async () => {
+    if (!supabase || !screen) {
+      setAssignedPlaylistItems(null);
+      return;
+    }
+    try {
+      const assignment = await supabase
+        .from('screen_playlist_assignments')
+        .select('playlist_id')
+        .eq('screen_id', screen.id)
+        .maybeSingle();
+      if (assignment.error || !assignment.data?.playlist_id) {
+        setAssignedPlaylistItems(null);
+        return;
+      }
+      const response = await supabase
+        .from('playlist_items')
+        .select('id, screen_id, playlist_id, media_id, display_order, duration_seconds, duration, start_time, end_time, media(id, file_name, file_url, media_type, created_at)')
+        .eq('playlist_id', assignment.data.playlist_id)
+        .order('display_order', { ascending: true });
+      if (response.error) throw response.error;
+      setAssignedPlaylistItems(
+        ((response.data ?? []) as unknown as PlaylistItem[]).filter(
+          (item) => item.media && isWithinWindow(item.start_time, item.end_time),
+        ),
+      );
+    } catch {
+      setAssignedPlaylistItems(null);
+    }
+  }, [screen]);
 
   const loadActiveTemplate = useCallback(async () => {
     if (!supabase || !screen) {
@@ -1849,7 +2069,7 @@ function PreviewPanel({
           .maybeSingle(),
         supabase
           .from('screen_template_zones')
-          .select('id, template_id, zone_key, media_id, fit_mode, background_color, sort_order, x, y, width, height, z_index, border_radius, media(id, file_name, file_url, media_type, created_at)')
+          .select(TEMPLATE_ZONE_SELECT)
           .eq('template_id', assignmentResponse.data.template_id)
           .order('sort_order', { ascending: true }),
       ]);
@@ -1874,6 +2094,10 @@ function PreviewPanel({
   }, [loadActiveTemplate]);
 
   useEffect(() => {
+    loadAssignedPlaylist();
+  }, [loadAssignedPlaylist]);
+
+  useEffect(() => {
     if (!supabase || !screen) return;
     const client = supabase;
     const channel = client
@@ -1881,12 +2105,15 @@ function PreviewPanel({
       .on('postgres_changes', { event: '*', schema: 'public', table: 'screen_template_assignments', filter: `screen_id=eq.${screen.id}` }, loadActiveTemplate)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'screen_templates' }, loadActiveTemplate)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'screen_template_zones' }, loadActiveTemplate)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'screen_playlist_assignments', filter: `screen_id=eq.${screen.id}` }, loadAssignedPlaylist)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'playlists' }, loadAssignedPlaylist)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'playlist_items' }, loadAssignedPlaylist)
       .subscribe();
 
     return () => {
       client.removeChannel(channel);
     };
-  }, [loadActiveTemplate, screen]);
+  }, [loadActiveTemplate, loadAssignedPlaylist, screen]);
 
   useEffect(() => {
     setCurrentIndex(0);
@@ -1949,7 +2176,7 @@ function PreviewPanel({
               url={currentItem.media.file_url}
               title={currentItem.media.file_name}
               mode="player"
-              loopPlayback={activeItems.length === 1}
+              loopPlayback={previewItems.length === 1}
               onPlaybackComplete={advance}
             />
           ) : currentItem.media.media_type === 'video' ? (
@@ -1958,7 +2185,7 @@ function PreviewPanel({
               className="h-full w-full object-contain"
               src={appendCacheSignature(currentItem.media.file_url, signature)}
               autoPlay
-              loop={activeItems.length === 1}
+              loop={previewItems.length === 1}
               muted
               playsInline
               preload="auto"
@@ -1982,7 +2209,7 @@ function PreviewPanel({
         </div>
       )}
       <div className="mt-4 grid gap-3 md:grid-cols-3">
-        {activeItems.map((item) => (
+        {previewItems.map((item) => (
           <div
             key={item.id}
             className={`rounded-lg border px-3 py-2 ${!activeTemplate && item.id === currentItem?.id ? 'border-cyan-300/60 bg-cyan-500/10' : 'border-slate-800 bg-slate-950'}`}
@@ -2000,6 +2227,7 @@ function PreviewPanel({
 
 function TemplatesPanel({ data }: { data: ReturnType<typeof useSignageData> }) {
   const [templates, setTemplates] = useState<ScreenTemplate[]>([]);
+  const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [zones, setZones] = useState<ScreenTemplateZone[]>([]);
   const [assignments, setAssignments] = useState<ScreenTemplateAssignment[]>([]);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
@@ -2041,6 +2269,16 @@ function TemplatesPanel({ data }: { data: ReturnType<typeof useSignageData> }) {
     }
   }, [data]);
 
+  const loadReusablePlaylists = useCallback(async () => {
+    if (!supabase) return;
+    const { data: rows, error } = await supabase.from('playlists').select('*').order('name');
+    if (error) {
+      data.notify({ tone: 'error', message: `${error.message}. Run supabase-playlists-migration.sql.` });
+      return;
+    }
+    setPlaylists((rows ?? []) as Playlist[]);
+  }, [data]);
+
   const loadTemplateDetails = useCallback(
     async (templateId = selectedTemplateId) => {
       if (!supabase || !templateId) {
@@ -2053,7 +2291,7 @@ function TemplatesPanel({ data }: { data: ReturnType<typeof useSignageData> }) {
         const [zonesResponse, assignmentsResponse] = await Promise.all([
           supabase
             .from('screen_template_zones')
-            .select('id, template_id, zone_key, media_id, fit_mode, background_color, sort_order, x, y, width, height, z_index, border_radius, media(id, file_name, file_url, media_type, created_at)')
+            .select(TEMPLATE_ZONE_SELECT)
             .eq('template_id', templateId)
             .order('sort_order', { ascending: true }),
           supabase.from('screen_template_assignments').select('*').eq('template_id', templateId),
@@ -2073,6 +2311,10 @@ function TemplatesPanel({ data }: { data: ReturnType<typeof useSignageData> }) {
   useEffect(() => {
     loadTemplates();
   }, [loadTemplates]);
+
+  useEffect(() => {
+    loadReusablePlaylists();
+  }, [loadReusablePlaylists]);
 
   useEffect(() => {
     loadTemplateDetails();
@@ -2244,6 +2486,7 @@ function TemplatesPanel({ data }: { data: ReturnType<typeof useSignageData> }) {
         template={selectedTemplate}
         zones={zones}
         media={data.media}
+        playlists={playlists}
         onBack={() => setCanvasEditorTemplateId(null)}
         onAddZone={addCanvasZone}
         onRemoveZone={removeCanvasZone}
@@ -2396,6 +2639,7 @@ function TemplatesPanel({ data }: { data: ReturnType<typeof useSignageData> }) {
                               label={definition.label}
                               zone={zone}
                               media={data.media}
+                              playlists={playlists}
                               onUpdate={(patch) => updateZone(zone, patch)}
                             />
                           );
@@ -2436,6 +2680,7 @@ function CanvasTemplateEditor({
   template,
   zones,
   media,
+  playlists,
   onBack,
   onAddZone,
   onRemoveZone,
@@ -2444,6 +2689,7 @@ function CanvasTemplateEditor({
   template: ScreenTemplate;
   zones: ScreenTemplateZone[];
   media: Media[];
+  playlists: Playlist[];
   onBack: () => void;
   onAddZone: () => void;
   onRemoveZone: (zone: ScreenTemplateZone) => void;
@@ -2585,7 +2831,7 @@ function CanvasTemplateEditor({
                   backgroundColor: zone.background_color ?? '#020617',
                 }}
               >
-                {zone.media ? (
+                {zone.media || zone.playlist ? (
                   <TemplateRenderer template={{ ...template, layout_type: 'full' }} zones={[{ ...zone, zone_key: 'main' }]} mode="preview" />
                 ) : (
                   <div className="flex h-full w-full items-center justify-center text-sm text-slate-500">{zone.zone_key}</div>
@@ -2633,7 +2879,7 @@ function CanvasTemplateEditor({
                 </button>
               </div>
 
-              <ZoneContentSelect zone={selectedZone} media={media} onUpdate={updateSelectedZone} />
+              <ZoneContentSelect zone={selectedZone} media={media} playlists={playlists} onUpdate={updateSelectedZone} />
               <ZoneFitSelect zone={selectedZone} onUpdate={updateSelectedZone} />
               <ZoneColorInput zone={selectedZone} onUpdate={updateSelectedZone} />
 
@@ -2746,21 +2992,23 @@ function PresetZoneEditor({
   label,
   zone,
   media,
+  playlists,
   onUpdate,
 }: {
   label: string;
   zone: ScreenTemplateZone;
   media: Media[];
+  playlists: Playlist[];
   onUpdate: (patch: Partial<ScreenTemplateZone>) => void;
 }) {
   return (
     <div className="rounded-lg border border-slate-800 bg-slate-950 p-3">
       <div className="mb-3 flex items-center justify-between gap-3">
         <p className="text-sm font-semibold text-white">{label}</p>
-        <Badge text={zone.media?.file_name ?? 'Empty'} tone={zone.media ? 'cyan' : 'amber'} />
+        <Badge text={zone.playlist?.name ?? zone.media?.file_name ?? 'Empty'} tone={zone.playlist || zone.media ? 'cyan' : 'amber'} />
       </div>
       <div className="grid gap-3 md:grid-cols-[1fr_120px_72px]">
-        <ZoneContentSelect zone={zone} media={media} onUpdate={onUpdate} />
+        <ZoneContentSelect zone={zone} media={media} playlists={playlists} onUpdate={onUpdate} />
         <ZoneFitSelect zone={zone} onUpdate={onUpdate} />
         <ZoneColorInput zone={zone} onUpdate={onUpdate} />
       </div>
@@ -2877,25 +3125,44 @@ function CanvasZoneEditor({
 function ZoneContentSelect({
   zone,
   media,
+  playlists = [],
   onUpdate,
 }: {
   zone: ScreenTemplateZone;
   media: Media[];
+  playlists?: Playlist[];
   onUpdate: (patch: Partial<ScreenTemplateZone>) => void;
 }) {
   return (
     <Field label="Content">
       <select
-        value={zone.media_id ?? ''}
-        onChange={(event) => onUpdate({ media_id: event.target.value || null })}
+        value={zone.playlist_id ? `playlist:${zone.playlist_id}` : zone.media_id ? `media:${zone.media_id}` : ''}
+        onChange={(event) => {
+          const [kind, id] = event.target.value.split(':');
+          onUpdate({
+            media_id: kind === 'media' ? id : null,
+            playlist_id: kind === 'playlist' ? id : null,
+          });
+        }}
         className="field"
       >
         <option value="">None</option>
+        {playlists.length > 0 && (
+          <optgroup label="Playlists">
+            {playlists.map((playlist) => (
+              <option key={playlist.id} value={`playlist:${playlist.id}`}>
+                {playlist.name}
+              </option>
+            ))}
+          </optgroup>
+        )}
+        <optgroup label="Media">
         {media.map((asset) => (
-          <option key={asset.id} value={asset.id}>
+          <option key={asset.id} value={`media:${asset.id}`}>
             {asset.file_name}
           </option>
         ))}
+        </optgroup>
       </select>
     </Field>
   );
