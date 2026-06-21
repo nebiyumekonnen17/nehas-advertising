@@ -7,11 +7,12 @@ import { parseSignageApp } from '../lib/apps';
 import { appendCacheSignature } from '../lib/media';
 import { supabase } from '../lib/supabase';
 import { isWithinWindow } from '../lib/time';
-import type { PlaylistItem, Screen, ScreenTemplate, ScreenTemplateZone } from '../types';
+import { getTransitionClassName } from '../lib/transitions';
+import type { PlaylistItem, Screen, ScreenTemplate, ScreenTemplateZone, TransitionEffect } from '../types';
 
 const PLAYER_VERSION = 'web-player-0.1.0';
 const TEMPLATE_ZONE_SELECT =
-  'id, template_id, zone_key, media_id, playlist_id, fit_mode, background_color, sort_order, x, y, width, height, z_index, border_radius, media(id, file_name, file_url, media_type, created_at), playlist:playlists(id, name, created_at, playlist_items(id, screen_id, playlist_id, media_id, display_order, duration_seconds, duration, start_time, end_time, media(id, file_name, file_url, media_type, created_at)))';
+  'id, template_id, zone_key, media_id, playlist_id, fit_mode, background_color, sort_order, x, y, width, height, z_index, border_radius, media(id, file_name, file_url, media_type, created_at), playlist:playlists(id, name, transition_effect, created_at, playlist_items(id, screen_id, playlist_id, media_id, display_order, duration_seconds, duration, start_time, end_time, media(id, file_name, file_url, media_type, created_at)))';
 
 type ActiveTemplate = {
   template: ScreenTemplate;
@@ -62,6 +63,7 @@ function getTemplateSignature(activeTemplate: ActiveTemplate | null) {
             zone.media?.file_url,
             zone.media?.created_at,
             zone.playlist_id,
+            zone.playlist?.transition_effect,
             zone.playlist?.playlist_items
               ?.map((item) => `${item.id}:${item.media_id}:${item.display_order}:${item.duration_seconds}:${item.media?.file_url}`)
               .join(','),
@@ -81,6 +83,7 @@ export default function PlayerScreen({ screenId, onNavigate }: Props) {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
   const [failedItemIds, setFailedItemIds] = useState<Set<string>>(() => new Set());
+  const [playlistTransition, setPlaylistTransition] = useState<TransitionEffect>('none');
   const manifestRequestIdRef = useRef(0);
 
   const activeItems = useMemo(
@@ -165,11 +168,16 @@ export default function PlayerScreen({ screenId, onNavigate }: Props) {
       try {
         const playlistAssignment = await supabase
           .from('screen_playlist_assignments')
-          .select('playlist_id')
+          .select('playlist_id, playlist:playlists(transition_effect)')
           .eq('screen_id', screenId)
           .maybeSingle();
 
         if (!playlistAssignment.error && playlistAssignment.data?.playlist_id) {
+          const assignmentData = playlistAssignment.data as unknown as {
+            playlist_id: string;
+            playlist?: { transition_effect?: TransitionEffect } | null;
+          };
+          setPlaylistTransition(assignmentData.playlist?.transition_effect ?? 'none');
           const reusableItems = await supabase
             .from('playlist_items')
             .select('id, screen_id, playlist_id, media_id, display_order, duration_seconds, duration, start_time, end_time, media(id, file_name, file_url, media_type, created_at)')
@@ -178,8 +186,11 @@ export default function PlayerScreen({ screenId, onNavigate }: Props) {
           if (!reusableItems.error) {
             nextItems = (reusableItems.data ?? []) as unknown as PlaylistItem[];
           }
+        } else {
+          setPlaylistTransition('none');
         }
       } catch {
+        setPlaylistTransition('none');
         // Reusable playlists are optional until their migration is installed.
       }
       setItems((current) =>
@@ -455,6 +466,10 @@ export default function PlayerScreen({ screenId, onNavigate }: Props) {
 
   return (
     <PlayerShell screen={screen} settings={settings}>
+      <div
+        key={`${currentItem.id}-${playbackCycle}`}
+        className={`h-full w-full ${getTransitionClassName(playlistTransition)}`}
+      >
       {currentMedia.media_type === 'url' ? (
         <AppContent
           key={`${currentItem.id}-${playbackCycle}`}
@@ -490,6 +505,7 @@ export default function PlayerScreen({ screenId, onNavigate }: Props) {
           onError={() => skipFailedItem(currentItem.id)}
         />
       )}
+      </div>
       {nextItem?.media?.media_type !== 'video' && nextItem?.media && (
         <img
           className="pointer-events-none absolute h-1 w-1 opacity-0"

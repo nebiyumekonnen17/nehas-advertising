@@ -6,6 +6,7 @@ import type { PointerEvent as ReactPointerEvent } from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { parseSignageApp } from '../lib/apps';
 import { isWithinWindow } from '../lib/time';
+import { getTransitionClassName } from '../lib/transitions';
 
 type Props = {
   template: ScreenTemplate;
@@ -236,24 +237,26 @@ function PlaylistZoneContent({ zone, mode }: { zone: ScreenTemplateZone; mode: '
   const media = currentItem.media;
   const key = `${currentItem.id}-${cycle}`;
   const fitClass = zone.fit_mode === 'cover' ? 'object-cover' : 'object-contain';
+  const transitionClass = getTransitionClassName(zone.playlist?.transition_effect);
 
   if (media.media_type === 'url') {
     return (
+      <div key={key} className={`h-full w-full ${transitionClass}`}>
       <AppContent
-        key={key}
         url={media.file_url}
         title={media.file_name}
         mode="player"
         loopPlayback={items.length === 1}
         onPlaybackComplete={advance}
       />
+      </div>
     );
   }
 
   if (media.media_type === 'video') {
     return (
+      <div key={key} className={`h-full w-full ${transitionClass}`}>
       <video
-        key={key}
         className={`h-full w-full bg-black ${fitClass}`}
         src={appendCacheSignature(media.file_url, `${media.created_at ?? media.id}-${cycle}`)}
         autoPlay
@@ -264,16 +267,18 @@ function PlaylistZoneContent({ zone, mode }: { zone: ScreenTemplateZone; mode: '
         onEnded={advance}
         onError={advance}
       />
+      </div>
     );
   }
 
   return (
+    <div key={key} className={`h-full w-full ${transitionClass}`}>
     <img
-      key={key}
       className={`h-full w-full bg-black ${fitClass}`}
       src={appendCacheSignature(media.file_url, `${media.created_at ?? media.id}-${cycle}`)}
       alt={media.file_name}
       onError={advance}
     />
+    </div>
   );
 }

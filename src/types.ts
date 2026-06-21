@@ -40,9 +40,12 @@ export type PlaylistItem = {
 export type Playlist = {
   id: string;
   name: string;
+  transition_effect: TransitionEffect;
   created_at: string | null;
   playlist_items?: PlaylistItem[];
 };
+
+export type TransitionEffect = 'none' | 'fade' | 'slide-left' | 'slide-up' | 'zoom';
 
 export type ScreenPlaylistAssignment = {
   id: string;

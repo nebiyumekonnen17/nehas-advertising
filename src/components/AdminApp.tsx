@@ -59,6 +59,7 @@ import { getTemplateLayout, TEMPLATE_LAYOUTS } from '../lib/templates';
 import { supabase } from '../lib/supabase';
 import type { AppSettings } from '../lib/settings';
 import { formatRelativeLastSeen, isOnline, isWithinWindow } from '../lib/time';
+import { getTransitionClassName, TRANSITION_OPTIONS } from '../lib/transitions';
 import {
   compressVideoForUpload,
   formatFileSize,
@@ -77,6 +78,7 @@ import type {
   ScreenTemplateAssignment,
   ScreenTemplateZone,
   TemplateLayoutType,
+  TransitionEffect,
 } from '../types';
 
 type Props = {
@@ -87,7 +89,7 @@ type Props = {
 type View = 'screens' | 'media' | 'playlists' | 'campaigns' | 'templates' | 'preview' | 'settings';
 
 const TEMPLATE_ZONE_SELECT =
-  'id, template_id, zone_key, media_id, playlist_id, fit_mode, background_color, sort_order, x, y, width, height, z_index, border_radius, media(id, file_name, file_url, media_type, created_at), playlist:playlists(id, name, created_at, playlist_items(id, screen_id, playlist_id, media_id, display_order, duration_seconds, duration, start_time, end_time, media(id, file_name, file_url, media_type, created_at)))';
+  'id, template_id, zone_key, media_id, playlist_id, fit_mode, background_color, sort_order, x, y, width, height, z_index, border_radius, media(id, file_name, file_url, media_type, created_at), playlist:playlists(id, name, transition_effect, created_at, playlist_items(id, screen_id, playlist_id, media_id, display_order, duration_seconds, duration, start_time, end_time, media(id, file_name, file_url, media_type, created_at)))';
 
 function randomPairingCode() {
   return String(Math.floor(100000 + Math.random() * 900000));
@@ -1231,6 +1233,25 @@ function PlaylistPanel({ data, settings }: { data: ReturnType<typeof useSignageD
     }
   }
 
+  async function updateTransitionEffect(effect: TransitionEffect) {
+    if (!supabase || !selectedPlaylist) return;
+    try {
+      const { error } = await supabase
+        .from('playlists')
+        .update({ transition_effect: effect })
+        .eq('id', selectedPlaylist.id);
+      if (error) throw error;
+      setPlaylists((current) =>
+        current.map((playlist) =>
+          playlist.id === selectedPlaylist.id ? { ...playlist, transition_effect: effect } : playlist,
+        ),
+      );
+      data.notify({ tone: 'success', message: 'Playlist transition updated.' });
+    } catch (error) {
+      data.notify({ tone: 'error', message: error instanceof Error ? error.message : 'Could not update transition.' });
+    }
+  }
+
   async function addMedia(asset: Media) {
     if (!supabase || !selectedPlaylistId) return;
     const nextOrder = orderedItems.reduce((max, item) => Math.max(max, item.display_order), 0) + 1;
@@ -1366,6 +1387,21 @@ function PlaylistPanel({ data, settings }: { data: ReturnType<typeof useSignageD
               </button>
             )}
           </div>
+          {selectedPlaylist && (
+            <div className="mt-4 max-w-xs">
+              <Field label="Transition">
+                <select
+                  className="field"
+                  value={selectedPlaylist.transition_effect ?? 'none'}
+                  onChange={(event) => updateTransitionEffect(event.target.value as TransitionEffect)}
+                >
+                  {TRANSITION_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </Field>
+            </div>
+          )}
           <div className="mt-5 space-y-3">
           {!selectedPlaylist ? (
             <EmptyState icon={<Clock3 />} title="No playlist selected" description="Create or select a playlist first." />
@@ -1990,6 +2026,7 @@ function PreviewPanel({
   } | null>(null);
   const [templateError, setTemplateError] = useState('');
   const [assignedPlaylistItems, setAssignedPlaylistItems] = useState<PlaylistItem[] | null>(null);
+  const [playlistTransition, setPlaylistTransition] = useState<TransitionEffect>('none');
   const [currentIndex, setCurrentIndex] = useState(0);
   const [playbackCycle, setPlaybackCycle] = useState(0);
   const previewItems = assignedPlaylistItems ?? activeItems;
@@ -2016,13 +2053,19 @@ function PreviewPanel({
     try {
       const assignment = await supabase
         .from('screen_playlist_assignments')
-        .select('playlist_id')
+        .select('playlist_id, playlist:playlists(transition_effect)')
         .eq('screen_id', screen.id)
         .maybeSingle();
       if (assignment.error || !assignment.data?.playlist_id) {
         setAssignedPlaylistItems(null);
+        setPlaylistTransition('none');
         return;
       }
+      const assignmentData = assignment.data as unknown as {
+        playlist_id: string;
+        playlist?: { transition_effect?: TransitionEffect } | null;
+      };
+      setPlaylistTransition(assignmentData.playlist?.transition_effect ?? 'none');
       const response = await supabase
         .from('playlist_items')
         .select('id, screen_id, playlist_id, media_id, display_order, duration_seconds, duration, start_time, end_time, media(id, file_name, file_url, media_type, created_at)')
@@ -2162,6 +2205,10 @@ function PreviewPanel({
       )}
       <div className="mt-5 overflow-hidden rounded-lg border border-slate-800 bg-black">
         <div className="aspect-video">
+          <div
+            key={activeTemplate ? activeTemplate.template.id : signature}
+            className={`h-full w-full ${activeTemplate ? '' : getTransitionClassName(playlistTransition)}`}
+          >
           {activeTemplate ? (
             <TemplateRenderer
               template={activeTemplate.template}
@@ -2201,6 +2248,7 @@ function PreviewPanel({
               onError={advance}
             />
           )}
+          </div>
         </div>
       </div>
       {activeTemplate && (

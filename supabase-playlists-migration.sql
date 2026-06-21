@@ -4,9 +4,24 @@
 create table if not exists public.playlists (
   id uuid not null default extensions.uuid_generate_v4(),
   name text not null,
+  transition_effect text not null default 'none',
   created_at timestamp with time zone not null default now(),
-  constraint playlists_pkey primary key (id)
+  constraint playlists_pkey primary key (id),
+  constraint playlists_transition_effect_check check (
+    transition_effect = any (array['none', 'fade', 'slide-left', 'slide-up', 'zoom'])
+  )
 );
+
+alter table public.playlists
+  add column if not exists transition_effect text not null default 'none';
+
+do $$
+begin
+  alter table public.playlists drop constraint if exists playlists_transition_effect_check;
+  alter table public.playlists add constraint playlists_transition_effect_check check (
+    transition_effect = any (array['none', 'fade', 'slide-left', 'slide-up', 'zoom'])
+  );
+end $$;
 
 alter table public.playlist_items
   add column if not exists playlist_id uuid null references public.playlists(id) on delete cascade;
