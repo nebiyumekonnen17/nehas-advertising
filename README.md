@@ -39,6 +39,10 @@ Run the SQL files in this order:
 
 The final production setup enables the access policies and realtime tables needed by anonymous TV players and authenticated operators.
 
+## Large Video Uploads
+
+Videos larger than 45 MB are compressed in the operator's browser before upload. Compression produces a muted MP4 up to 1280 pixels wide and targets a file size below the Supabase Free-plan limit. The FFmpeg engine loads only when compression is needed.
+
 ## Deployment Guide
 
 See [DEPLOYMENT.md](DEPLOYMENT.md) for Supabase Auth and Vercel setup. Use [VALIDATION_CHECKLIST.md](VALIDATION_CHECKLIST.md) before handing the system to operators.

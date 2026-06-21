@@ -43,6 +43,12 @@ function explainStorageError(error: unknown): Error {
     );
   }
 
+  if (normalized.includes('exceeded the maximum allowed size') || normalized.includes('maximum file size')) {
+    return new Error(
+      'The file exceeds the Supabase Storage limit. Large videos should be compressed before upload.',
+    );
+  }
+
   return new Error(message || 'Supabase Storage upload failed.');
 }
 

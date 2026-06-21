@@ -59,6 +59,11 @@ import { getTemplateLayout, TEMPLATE_LAYOUTS } from '../lib/templates';
 import { supabase } from '../lib/supabase';
 import type { AppSettings } from '../lib/settings';
 import { formatRelativeLastSeen, isOnline, isWithinWindow } from '../lib/time';
+import {
+  compressVideoForUpload,
+  formatFileSize,
+  VIDEO_COMPRESSION_THRESHOLD_BYTES,
+} from '../lib/videoCompression';
 import type {
   Campaign,
   CampaignItem,
@@ -805,6 +810,7 @@ function MediaPanel({ data }: { data: ReturnType<typeof useSignageData> }) {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewType, setPreviewType] = useState<'image' | 'video' | null>(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState('');
 
   useEffect(() => {
     return () => {
@@ -820,13 +826,23 @@ function MediaPanel({ data }: { data: ReturnType<typeof useSignageData> }) {
     setPreviewUrl(objectUrl);
     setPreviewType(inferMediaType(file));
     setIsUploading(true);
+    setUploadStatus('Preparing upload...');
 
     try {
-      const uploaded = await uploadToSupabaseStorage(file);
+      let uploadFile = file;
+      if (inferMediaType(file) === 'video' && file.size > VIDEO_COMPRESSION_THRESHOLD_BYTES) {
+        setUploadStatus(`Compressing ${formatFileSize(file.size)} video...`);
+        uploadFile = await compressVideoForUpload(file, (progress) => {
+          setUploadStatus(`Compressing video... ${progress}%`);
+        });
+      }
+
+      setUploadStatus(`Uploading ${formatFileSize(uploadFile.size)}...`);
+      const uploaded = await uploadToSupabaseStorage(uploadFile);
       const { error } = await supabase.from('media').insert({
-        file_name: file.name,
+        file_name: uploadFile.name,
         file_url: uploaded.publicUrl,
-        media_type: inferMediaType(file),
+        media_type: inferMediaType(uploadFile),
       });
 
       if (error) {
@@ -838,7 +854,13 @@ function MediaPanel({ data }: { data: ReturnType<typeof useSignageData> }) {
         throw error;
       }
       await data.loadMedia();
-      data.notify({ tone: 'success', message: 'Media uploaded.' });
+      data.notify({
+        tone: 'success',
+        message:
+          uploadFile === file
+            ? 'Media uploaded.'
+            : `Video compressed from ${formatFileSize(file.size)} to ${formatFileSize(uploadFile.size)} and uploaded.`,
+      });
     } catch (error) {
       data.notify({ tone: 'error', message: explainUploadError(error) });
     } finally {
@@ -846,6 +868,7 @@ function MediaPanel({ data }: { data: ReturnType<typeof useSignageData> }) {
       setPreviewUrl(null);
       setPreviewType(null);
       setIsUploading(false);
+      setUploadStatus('');
     }
   }
 
@@ -892,8 +915,8 @@ function MediaPanel({ data }: { data: ReturnType<typeof useSignageData> }) {
         <PanelTitle title="Upload media" description="Images and videos are stored in Supabase Storage, then registered in the media table." />
         <label className="mt-5 flex min-h-56 cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed border-slate-600 bg-slate-950/70 px-5 text-center transition hover:border-cyan-300">
           <UploadCloud className="mb-3 h-9 w-9 text-cyan-300" />
-          <span className="font-medium text-white">{isUploading ? 'Uploading...' : 'Choose image or video'}</span>
-          <span className="mt-2 text-sm text-slate-500">Native preview is cleaned up after upload.</span>
+          <span className="font-medium text-white">{isUploading ? uploadStatus : 'Choose image or video'}</span>
+          <span className="mt-2 text-sm text-slate-500">Videos over 45 MB are compressed before upload.</span>
           <input
             className="sr-only"
             type="file"
